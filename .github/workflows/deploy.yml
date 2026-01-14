@@ -26,6 +26,11 @@ jobs:
       - name: Build project
         run: npm run build
 
+      - name: Check deployment path
+        run: |
+          echo "Remote path will be: ${{ secrets.SSH_REMOTE_PATH }}"
+          echo "Path ends with slash: $([[ "${{ secrets.SSH_REMOTE_PATH }}" == */ ]] && echo "YES" || echo "NO - WARNING: Should end with /")"
+
       - name: Deploy to Bluehost via SSH/rsync
         uses: burnett01/rsync-deployments@6.0.0
         continue-on-error: true
@@ -36,6 +41,7 @@ jobs:
           remote_host: ${{ secrets.SSH_HOST }}
           remote_user: ${{ secrets.SSH_USER }}
           remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          rsh: 'ssh -o StrictHostKeyChecking=no'
 
       - name: Verify deployment
         uses: appleboy/ssh-action@master
@@ -45,24 +51,41 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             echo "=== Remote path being checked ==="
-            echo "SSH_REMOTE_PATH: ${{ secrets.SSH_REMOTE_PATH }}"
+            REMOTE_PATH="${{ secrets.SSH_REMOTE_PATH }}"
+            echo "SSH_REMOTE_PATH: $REMOTE_PATH"
+            echo ""
+            echo "=== Current working directory ==="
+            pwd
+            echo ""
+            echo "=== Home directory ==="
+            echo $HOME
             echo ""
             echo "=== Checking if remote directory exists ==="
-            if [ -d "${{ secrets.SSH_REMOTE_PATH }}" ]; then
+            if [ -d "$REMOTE_PATH" ]; then
               echo "Directory exists"
-              ls -lah "${{ secrets.SSH_REMOTE_PATH }}"
+              ls -lah "$REMOTE_PATH" | head -20
             else
               echo "Directory does NOT exist!"
+              echo "Checking parent directory..."
+              ls -lah "$(dirname "$REMOTE_PATH")" | head -20
             fi
             echo ""
-            echo "=== Checking index.html ==="
-            if [ -f "${{ secrets.SSH_REMOTE_PATH }}index.html" ]; then
-              ls -lh "${{ secrets.SSH_REMOTE_PATH }}index.html"
+            echo "=== Checking for index.html in public_html ==="
+            if [ -f "$REMOTE_PATH/index.html" ]; then
+              ls -lh "$REMOTE_PATH/index.html"
               echo "File modification time:"
-              stat "${{ secrets.SSH_REMOTE_PATH }}index.html" | grep Modify
+              stat "$REMOTE_PATH/index.html" | grep Modify || ls -l "$REMOTE_PATH/index.html"
             else
-              echo "index.html does NOT exist!"
+              echo "index.html does NOT exist at $REMOTE_PATH/index.html"
+              echo "Searching for index.html in home directory..."
+              find ~/public_html -name "index.html" -ls 2>/dev/null | head -5
             fi
             echo ""
-            echo "=== Recent files (last 10 minutes) ==="
-            find "${{ secrets.SSH_REMOTE_PATH }}" -type f -mmin -10 -ls 2>/dev/null || echo "No recent files found"
+            echo "=== Checking for any dist subdirectory ==="
+            if [ -d "$REMOTE_PATH/dist" ]; then
+              echo "Found dist subdirectory! Files might be in wrong location."
+              ls -lah "$REMOTE_PATH/dist" | head -10
+            fi
+            echo ""
+            echo "=== Recent files in public_html (last 10 minutes) ==="
+            find "$REMOTE_PATH" -maxdepth 2 -type f -mmin -10 -ls 2>/dev/null | head -10 || echo "No recent files found"
