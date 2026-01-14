@@ -43,8 +43,9 @@ jobs:
 
       - name: Deploy to Bluehost via SSH/rsync
         uses: burnett01/rsync-deployments@6.0.0
+        continue-on-error: true
         with:
-          switches: -avzr --delete --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r
+          switches: -avzr --delete
           path: ./dist/
           remote_path: ${{ secrets.SSH_REMOTE_PATH }}
           remote_host: ${{ secrets.SSH_HOST }}
