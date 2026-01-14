@@ -26,22 +26,44 @@ jobs:
       - name: Build project
         run: npm run build
 
-      - name: Check deployment path
-        run: |
-          echo "Remote path will be: ${{ secrets.SSH_REMOTE_PATH }}"
-          echo "Path ends with slash: $([[ "${{ secrets.SSH_REMOTE_PATH }}" == */ ]] && echo "YES" || echo "NO - WARNING: Should end with /")"
+      - name: Fix remote directory permissions
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            REMOTE_PATH="${{ secrets.SSH_REMOTE_PATH }}"
+            # Remove trailing slash for chmod
+            REMOTE_PATH="${REMOTE_PATH%/}"
+            echo "Fixing permissions for: $REMOTE_PATH"
+            chmod 755 "$REMOTE_PATH" || echo "Could not change directory permissions"
+            # Ensure we can write to the directory
+            chmod u+w "$REMOTE_PATH" || echo "Could not add write permission"
 
       - name: Deploy to Bluehost via SSH/rsync
         uses: burnett01/rsync-deployments@6.0.0
-        continue-on-error: true
         with:
-          switches: -avzr --delete
+          switches: -avzr --delete --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r
           path: ./dist/
           remote_path: ${{ secrets.SSH_REMOTE_PATH }}
           remote_host: ${{ secrets.SSH_HOST }}
           remote_user: ${{ secrets.SSH_USER }}
           remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
-          rsh: 'ssh -o StrictHostKeyChecking=no'
+          rsh: 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+      - name: Fix file permissions after deployment
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            REMOTE_PATH="${{ secrets.SSH_REMOTE_PATH }}"
+            REMOTE_PATH="${REMOTE_PATH%/}"
+            echo "Fixing permissions for files in: $REMOTE_PATH"
+            find "$REMOTE_PATH" -type d -exec chmod 755 {} \; || echo "Could not fix directory permissions"
+            find "$REMOTE_PATH" -type f -exec chmod 644 {} \; || echo "Could not fix file permissions"
 
       - name: Verify deployment
         uses: appleboy/ssh-action@master
@@ -50,42 +72,22 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            echo "=== Remote path being checked ==="
             REMOTE_PATH="${{ secrets.SSH_REMOTE_PATH }}"
-            echo "SSH_REMOTE_PATH: $REMOTE_PATH"
+            REMOTE_PATH="${REMOTE_PATH%/}"
+            echo "=== Checking deployment ==="
+            echo "Remote path: $REMOTE_PATH"
             echo ""
-            echo "=== Current working directory ==="
-            pwd
+            echo "=== Directory permissions ==="
+            ls -ld "$REMOTE_PATH"
             echo ""
-            echo "=== Home directory ==="
-            echo $HOME
-            echo ""
-            echo "=== Checking if remote directory exists ==="
-            if [ -d "$REMOTE_PATH" ]; then
-              echo "Directory exists"
-              ls -lah "$REMOTE_PATH" | head -20
-            else
-              echo "Directory does NOT exist!"
-              echo "Checking parent directory..."
-              ls -lah "$(dirname "$REMOTE_PATH")" | head -20
-            fi
-            echo ""
-            echo "=== Checking for index.html in public_html ==="
+            echo "=== Checking index.html ==="
             if [ -f "$REMOTE_PATH/index.html" ]; then
               ls -lh "$REMOTE_PATH/index.html"
-              echo "File modification time:"
-              stat "$REMOTE_PATH/index.html" | grep Modify || ls -l "$REMOTE_PATH/index.html"
+              echo "Last modified:"
+              stat "$REMOTE_PATH/index.html" 2>/dev/null | grep Modify || ls -l "$REMOTE_PATH/index.html"
             else
-              echo "index.html does NOT exist at $REMOTE_PATH/index.html"
-              echo "Searching for index.html in home directory..."
-              find ~/public_html -name "index.html" -ls 2>/dev/null | head -5
+              echo "ERROR: index.html not found!"
             fi
             echo ""
-            echo "=== Checking for any dist subdirectory ==="
-            if [ -d "$REMOTE_PATH/dist" ]; then
-              echo "Found dist subdirectory! Files might be in wrong location."
-              ls -lah "$REMOTE_PATH/dist" | head -10
-            fi
-            echo ""
-            echo "=== Recent files in public_html (last 10 minutes) ==="
-            find "$REMOTE_PATH" -maxdepth 2 -type f -mmin -10 -ls 2>/dev/null | head -10 || echo "No recent files found"
+            echo "=== Recent files (last 5 minutes) ==="
+            find "$REMOTE_PATH" -maxdepth 2 -type f -mmin -5 -ls 2>/dev/null | head -10 || echo "No recent files found"
